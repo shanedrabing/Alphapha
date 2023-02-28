@@ -2,9 +2,10 @@
 
 
 library(dplyr)
+library(httr)
 library(lubridate)
-library(shiny)
 library(rvest)
+library(shiny)
 library(tibble)
 
 
@@ -45,8 +46,8 @@ clean_names <- function(x) {
 
 get_content <- function(url) {
     url %>%
-        httr::GET() %>%
-        httr::content(na = "null")
+        GET() %>%
+        content(na = "null")
 }
 
 get_df <- function(url) {
