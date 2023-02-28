@@ -4,6 +4,7 @@
 library(dplyr)
 library(httr)
 library(lubridate)
+library(readr)
 library(rvest)
 library(shiny)
 library(tibble)
