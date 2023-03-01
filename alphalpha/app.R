@@ -112,13 +112,15 @@ parse_symbol <- function(symbol) {
     pair[1:2]
 }
 
-handle_get <- function(pair, input = NULL) {
+handle_get <- function(
+    pair, date_start = NULL, date_end = NULL, interval = NULL) {
+
     origin <- pair[1]
     symbol <- pair[2]
 
     if (origin == "YAHOO") {
         symbol %>%
-            api_yahoo(input$date_start, input$date_end, input$interval) %>%
+            api_yahoo(date_start, date_end, interval) %>%
             get_yahoo()
     } else if (origin == "FRED") {
         symbol %>%
@@ -178,20 +180,49 @@ ui <- navbarPage(
         ),
         column(width = 10,
             column(width = 7,
-                plotOutput("change_plot", "100%", "85vh")
+                plotOutput("plot_c", "100%", "85vh")
             ),
             column(width = 5,
                 h3("Model Summary"),
-                verbatimTextOutput("change_text"),
+                verbatimTextOutput("text_c_m"),
                 h3("Symbol Reference"),
-                verbatimTextOutput("change_symbols")
+                verbatimTextOutput("text_c_s")
             )
         )
     )),
 
-    # something else
-    tabPanel("...",
-    )
+    # delta histogram
+    tabPanel("Histogram", sidebarLayout(
+        sidebarPanel(width = 2,
+            # symbols
+            textInput("symbol_h", "Symbol", "AAPL"),
+
+            # probability
+            numericInput("prob", "Tail Probability", 0.1, 0, 0.5, 0.005),
+
+            # interval
+            selectInput("interval_h", "Interval", c("1d", "1wk", "1mo")),
+
+            # dates
+            dateInput("date_start_h", "Start and End",
+                      value = today() - 365, max = today()),
+            dateInput("date_end_h", NULL,
+                      max = today()),
+
+            # variables
+            selectInput("element_h", "Variable and Offset", OHLC, "close"),
+            numericInput("offset_h", NULL, 20, 0, step = 1)
+        ),
+        column(width = 10,
+            column(width = 10,
+                plotOutput("plot_h", "100%", "85vh")
+            ),
+            column(width = 2,
+                h3("Percentiles"),
+                verbatimTextOutput("text_h")
+            )
+        )
+    ))
 )
 
 # backend
@@ -200,14 +231,21 @@ server <- function(input, output) {
         # scrape
         input$symbol_x %>%
             parse_symbol() %>%
-            handle_get(input)
+            handle_get(input$date_start, input$date_end, input$interval)
     })
 
     f_df_y <- reactive({
         # scrape
         input$symbol_y %>%
             parse_symbol() %>%
-            handle_get(input)
+            handle_get(input$date_start, input$date_end, input$interval)
+    })
+
+    f_df_h <- reactive({
+        # scrape
+        input$symbol_h %>%
+            parse_symbol() %>%
+            handle_get(input$date_start_h, input$date_end_h, input$interval_h)
     })
 
     f_series_x <- reactive({
@@ -238,7 +276,21 @@ server <- function(input, output) {
         data.frame(date = df_y$date, series_y = minuend_y - subtrahend_y)
     })
 
-    output$change_plot <- renderPlot(res = 90, {
+    f_series_h <- reactive({
+        # react
+        df_h <- f_df_h()
+
+        # transform
+        minuend_h <- df_h %>%
+            pull(input$element_h)
+        subtrahend_h <- df_h %>%
+            pull(input$element_b) %>%
+            lag(input$offset_h)
+
+        data.frame(date = df_h$date, series_h = minuend_h - subtrahend_h)
+    })
+
+    output$plot_c <- renderPlot(res = 90, {
         # react
         series_x <- f_series_x()
         series_y <- f_series_y()
@@ -263,7 +315,69 @@ server <- function(input, output) {
             })
     })
 
-    output$change_text <- renderText(sep = "\n", {
+    output$plot_h <- renderPlot(res = 90, {
+        # react
+        series_h <- f_series_h()
+
+        # plot
+        series_h %>%
+            with({
+                op <- par(mar = c(5.5, 4, 3.5, 0.5))
+
+                title <- "Delta Histogram\n(%s, %s, %s, %s, %s, %s, %s)" %>%
+                    sprintf(trimws(input$symbol_h),
+                            input$prob,
+                            input$interval_h,
+                            input$date_start_h,
+                            input$date_end_h,
+                            input$element_h,
+                            input$offset_h)
+
+                tbl <- table(round(series_h))
+                key <- as.numeric(names(tbl))
+                val <- as.numeric(tbl)
+
+                qua <- c(input$prob, 1 - input$prob)
+                rng <- quantile(na.omit(series_h), qua)
+                col <- ifelse(rng < 0, 2, 3)
+
+                # initiate plot
+                plot(key, val, type = "n", xaxt = "n",
+                     main = title,
+                     xlab = "", ylab = "Count")
+
+                abline(v = 0, col = 4, lwd = 4)
+                axis(1, c(min(key), 0, max(key)))
+
+                abline(v = rng, col = col, lwd = 4)
+                axis(1, rng, round(rng, 2), las = 2)
+
+                segments(key, 0, key, val, lwd = 2, lend = 2)
+                points(key, val, pch = 16)
+
+                par(op)
+            })
+    })
+
+    output$text_h <- renderText(sep = "\n", {
+        # react
+        series_h <- f_series_h()
+
+        # data frame
+        series_h %>%
+            with({
+                p <- seq(0, 1, 0.04)
+                q <- quantile(series_h, p, na.rm = TRUE)
+
+                p %>%
+                    cbind(q) %>%
+                    apply(1, function(x) {
+                        sprintf("%3.0f%% :: %7.2f", 100 * x[1], x[2])
+                    })
+            })
+    })
+
+    output$text_c_m <- renderText(sep = "\n", {
         # react
         series_x <- f_series_x()
         series_y <- f_series_y()
@@ -279,7 +393,7 @@ server <- function(input, output) {
             "["(-(1:4))
     })
 
-    output$change_symbols <- renderText(sep = "\n", {
+    output$text_c_s <- renderText(sep = "\n", {
         TEXT_REFERENCE
     })
 }
