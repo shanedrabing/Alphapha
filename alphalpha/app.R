@@ -13,16 +13,22 @@ library(tibble)
 # CONSTANTS
 
 
-FORM_YAHOO_CGI <- "https://query1.finance.yahoo.com/v7/finance/download/%s?"
+OHLC <- c("open", "high", "low", "close", "adj_close", "volume")
+
+CGI_YAHOO <- "https://query1.finance.yahoo.com/v7/finance/download/%s?"
+CGI_FRED <- "https://fred.stlouisfed.org/graph/fredgraph.csv?"
 
 TEXT_REFERENCE <- trimws("
-^GSPC      ::  S&P 500
-^IXIC      ::  NASDAQ Composite
-^DJI       ::  Dow Jones Industrial Average
-^VIX       ::  CBOE Volatility
- DX-Y.NYB  ::  US Dollar Index
- GC=F      ::  Gold Spot
- CL=F      ::  Crude Oil
+^GSPC         ::  S&P 500
+^IXIC         ::  NASDAQ Composite
+^DJI          ::  Dow Jones Industrial Average
+^VIX          ::  CBOE Volatility
+^TNX          ::  Treasury Yield 10 Years
+ DX-Y.NYB     ::  US Dollar Index
+ GC=F         ::  Gold
+ HG=F         ::  Copper
+ CL=F         ::  Crude Oil
+ FRED:UNRATE  ::  Unemployment Rate
 ")
 
 
@@ -51,10 +57,17 @@ get_content <- function(url) {
         content(na = "null")
 }
 
-get_df <- function(url) {
+get_yahoo <- function(url) {
     url %>%
         get_content() %>%
         clean_names()
+}
+
+get_fred <- function(url) {
+    url %>%
+        GET() %>%
+        content() %>%
+        setNames(c("date", "close"))
 }
 
 concat <- function(..., sep = "", collapse = "") {
@@ -75,9 +88,43 @@ api_yahoo <- function(symbol, date_start, date_end, interval=c("1d", "1wk", "1mo
                 interval = interval,
                 events = "history")
 
-    FORM_YAHOO_CGI %>%
+    CGI_YAHOO %>%
         sprintf(symbol) %>%
         api_format(kwargs)
+}
+
+api_fred <- function(sid) {
+    api_format(CGI_FRED, c(id = sid))
+}
+
+mysplit <- function(x, split) {
+    unlist(strsplit(x, split))
+}
+
+parse_symbol <- function(symbol) {
+    pair <- symbol %>%
+        trimws() %>%
+        mysplit(":")
+
+    if (length(pair) == 1)
+        pair <- c("YAHOO", pair)
+
+    pair[1:2]
+}
+
+handle_get <- function(pair, input = NULL) {
+    origin <- pair[1]
+    symbol <- pair[2]
+
+    if (origin == "YAHOO") {
+        symbol %>%
+            api_yahoo(input$date_start, input$date_end, input$interval) %>%
+            get_yahoo()
+    } else if (origin == "FRED") {
+        symbol %>%
+            api_fred() %>%
+            get_fred()
+    }
 }
 
 
@@ -88,7 +135,7 @@ if (FALSE) {
     # parameters
     input <- list()
     input$symbol_x <- "AAPL"
-    input$symbol_y <- "DX-Y.NYB"
+    input$symbol_y <- "FRED:LNS12300025"
     input$date_start <- "2023-01-01"
     input$date_end <- "2023-03-01"
     input$interval <- "1d"
@@ -105,18 +152,28 @@ if (FALSE) {
 # frontend
 ui <- navbarPage(
     "Alphalpha",
-    tabPanel("Change Correlation", sidebarLayout(
+
+    # change correlation
+    tabPanel("Correlation", sidebarLayout(
         sidebarPanel(width = 2,
+            # symbols
             textInput("symbol_x", "Symbols", "^VIX"),
             textInput("symbol_y", NULL, "QQQ"),
+
+            # interval
             selectInput("interval", "Interval", c("1d", "1wk", "1mo")),
+
+            # dates
             dateInput("date_start", "Start and End",
                       value = today() - 365, max = today()),
             dateInput("date_end", NULL,
                       max = today()),
-            selectInput("element_a", "Minuend and Offset", c("open", "high", "low", "close", "adj_close", "volume"), "close"),
+
+            # variables
+            selectInput("element_a", "Minuend and Offset", OHLC, "close"),
             numericInput("offset_a", NULL, 0, 0, step = 1),
-            selectInput("element_b", "Subtrahend and Offset", c("open", "high", "low", "close", "adj_close", "volume"), "close"),
+
+            selectInput("element_b", "Subtrahend and Offset", OHLC, "close"),
             numericInput("offset_b", NULL, 1, 0, step = 1)
         ),
         column(width = 10,
@@ -131,34 +188,26 @@ ui <- navbarPage(
             )
         )
     )),
+
+    # something else
     tabPanel("...",
     )
 )
 
 # backend
 server <- function(input, output) {
-    f_symbol_x <- reactive({
-        input$symbol_x %>%
-            trimws()
-    })
-
-    f_symbol_y <- reactive({
-        input$symbol_y %>%
-            trimws()
-    })
-
     f_df_x <- reactive({
         # scrape
-        f_symbol_x() %>%
-            api_yahoo(input$date_start, input$date_end, input$interval) %>%
-            get_df()
+        input$symbol_x %>%
+            parse_symbol() %>%
+            handle_get(input)
     })
 
     f_df_y <- reactive({
         # scrape
-        f_symbol_y() %>%
-            api_yahoo(input$date_start, input$date_end, input$interval) %>%
-            get_df()
+        input$symbol_y %>%
+            parse_symbol() %>%
+            handle_get(input)
     })
 
     f_series_x <- reactive({
@@ -201,7 +250,8 @@ server <- function(input, output) {
                 op <- par(mar = c(4.5, 4.5, 0.5, 0.5))
 
                 plot(series_x, series_y, type = "n",
-                     xlab = f_symbol_x(), ylab = f_symbol_y())
+                     xlab = trimws(input$symbol_x),
+                     ylab = trimws(input$symbol_y))
 
                 abline(h = 0, v = 0, col = "grey70")
                 points(series_x, series_y, pch = 1)
