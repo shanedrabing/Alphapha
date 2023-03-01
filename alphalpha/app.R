@@ -71,9 +71,9 @@ api_format <- function(cgi, kwargs) {
     concat(cgi, api_kwargs(kwargs))
 }
 
-api_yahoo <- function(symbol, date_start, date_end, interval=c("1d", "1wk", "1mo")) {
-    kwargs <- c(period1 = as_unix_time(date_start),
-                period2 = as_unix_time(date_end),
+api_yahoo <- function(symbol, d_c_start, d_c_end, interval=c("1d", "1wk", "1mo")) {
+    kwargs <- c(period1 = as_unix_time(d_c_start),
+                period2 = as_unix_time(d_c_end),
                 interval = interval,
                 events = "history")
 
@@ -124,14 +124,14 @@ parse_symbol <- function(symbol) {
 }
 
 handle_get <- function(
-    pair, date_start = NULL, date_end = NULL, interval = NULL) {
+    pair, d_c_start = NULL, d_c_end = NULL, interval = NULL) {
 
     origin <- pair[1]
     symbol <- pair[2]
 
     if (origin == "YAHOO") {
         symbol %>%
-            api_yahoo(date_start, date_end, interval) %>%
+            api_yahoo(d_c_start, d_c_end, interval) %>%
             get_yahoo()
     } else if (origin == "FRED") {
         symbol %>%
@@ -147,23 +147,30 @@ handle_get <- function(
 if (FALSE) {
     # parameters
     input <- list()
-    input$symbol_x <- "AAPL"
-    input$symbol_y <- "FRED:LNS12300025"
-    input$date_start <- "2023-01-01"
-    input$date_end <- "2023-03-01"
-    input$interval <- "1d"
-    input$element_a <- "close"
-    input$offset_a <- 0
-    input$element_b <- "open"
-    input$offset_b <- 0
+    input$sym_c0 <- "AAPL"
+    input$sym_c1 <- "FRED:LNS12300025"
+    input$d_c_start <- "2023-01-01"
+    input$d_c_end <- "2023-03-01"
+    input$intr_c <- "1d"
+    input$minu <- "close"
+    input$subt <- "open"
+    input$offs_c <- 0
 }
 
 
 # FRONTEND
 
 
-ui <- navbarPage(
-    "Alphalpha",
+ui <- navbarPage("Alphalpha",
+    # HEAD
+
+
+    header = tags$head(tags$style(HTML("
+        .form-group {
+            margin-bottom: 10px;
+        }
+        "))
+    ),
 
 
     # CORRELATION
@@ -172,24 +179,25 @@ ui <- navbarPage(
     tabPanel("Correlation", sidebarLayout(
         sidebarPanel(width = 2,
             # symbols
-            textInput("symbol_x", "Symbols", "^VIX"),
-            textInput("symbol_y", NULL, "QQQ"),
+            textInput("sym_c0", "Symbols", "^VIX"),
+            textInput("sym_c1", NULL, "QQQ"),
+
+            # operation
+            selectInput("op_c", "Operation", c("Change", "Difference")),
 
             # interval
-            selectInput("interval", "Interval", c("1d", "1wk", "1mo")),
+            selectInput("intr_c", "Interval", c("1d", "1wk", "1mo")),
 
             # dates
-            dateInput("date_start", "Start and End",
+            dateInput("d_c_start", "Start and End",
                       value = today() - 365, max = today()),
-            dateInput("date_end", NULL,
+            dateInput("d_c_end", NULL,
                       max = today()),
 
             # variables
-            selectInput("element_a", "Minuend and Offset", OHLC, "close"),
-            numericInput("offset_a", NULL, 0, 0, step = 1),
-
-            selectInput("element_b", "Subtrahend and Offset", OHLC, "close"),
-            numericInput("offset_b", NULL, 1, 0, step = 1)
+            selectInput("minu", "Minuend", OHLC, "close"),
+            selectInput("subt", "Subtrahend and Offset", OHLC, "open"),
+            numericInput("offs_c", NULL, 0, 0, step = 1)
         ),
         column(width = 10,
             column(width = 7,
@@ -211,23 +219,26 @@ ui <- navbarPage(
     tabPanel("Histogram", sidebarLayout(
         sidebarPanel(width = 2,
             # symbols
-            textInput("symbol_h", "Symbol", "AAPL"),
+            textInput("sym_h", "Symbol", "AAPL"),
+
+            # operation
+            selectInput("op_h", "Operation", c("Difference", "Change")),
 
             # probability
             numericInput("prob", "Tail Probability", 0.1, 0, 0.5, 0.005),
 
             # interval
-            selectInput("interval_h", "Interval", c("1d", "1wk", "1mo")),
+            selectInput("intr_h", "Interval", c("1d", "1wk", "1mo")),
 
             # dates
-            dateInput("date_start_h", "Start and End",
+            dateInput("d_h_start", "Start and End",
                       value = today() - 365, max = today()),
-            dateInput("date_end_h", NULL,
+            dateInput("d_h_end", NULL,
                       max = today()),
 
             # variables
-            selectInput("element_h", "Variable and Offset", OHLC, "close"),
-            numericInput("offset_h", NULL, 20, 0, step = 1)
+            selectInput("elem_h", "Variable and Offset", OHLC, "close"),
+            numericInput("offs_h", NULL, 20, 0, step = 1)
         ),
         column(width = 10,
             column(width = 10,
@@ -253,16 +264,16 @@ server <- function(input, output) {
 
     f_df_x <- reactive({
         # scrape
-        input$symbol_x %>%
+        input$sym_c0 %>%
             parse_symbol() %>%
-            handle_get(input$date_start, input$date_end, input$interval)
+            handle_get(input$d_c_start, input$d_c_end, input$intr_c)
     })
 
     f_df_y <- reactive({
         # scrape
-        input$symbol_y %>%
+        input$sym_c1 %>%
             parse_symbol() %>%
-            handle_get(input$date_start, input$date_end, input$interval)
+            handle_get(input$d_c_start, input$d_c_end, input$intr_c)
     })
 
     f_series_x <- reactive({
@@ -271,12 +282,18 @@ server <- function(input, output) {
 
         # transform
         minuend_x <- df_x %>%
-            pull(input$element_a) %>%
-            lead(input$offset_a)
+            pull(input$minu)
         subtrahend_x <- df_x %>%
-            pull(input$element_b) %>%
-            lead(input$offset_b)
-        data.frame(date = df_x$date, series_x = minuend_x - subtrahend_x)
+            pull(input$subt) %>%
+            lag(input$offs_c)
+
+        # difference is default
+        result <- minuend_x - subtrahend_x
+        if (input$op_c == "Change") {
+            result <- 100 * (minuend_x - subtrahend_x) / subtrahend_x
+        }
+
+        data.frame(date = df_x$date, series_x = result)
     })
 
     f_series_y <- reactive({
@@ -285,12 +302,18 @@ server <- function(input, output) {
 
         # transform
         minuend_y <- df_y %>%
-            pull(input$element_a) %>%
-            lead(input$offset_a)
+            pull(input$minu)
         subtrahend_y <- df_y %>%
-            pull(input$element_b) %>%
-            lead(input$offset_b)
-        data.frame(date = df_y$date, series_y = minuend_y - subtrahend_y)
+            pull(input$subt) %>%
+            lag(input$offs_c)
+
+        # difference is default
+        result <- minuend_y - subtrahend_y
+        if (input$op_c == "Change") {
+            result <- 100 * (minuend_y - subtrahend_y) / subtrahend_y
+        }
+
+        data.frame(date = df_y$date, series_y = result)
     })
 
     output$plot_c <- renderPlot(res = 90, {
@@ -300,25 +323,25 @@ server <- function(input, output) {
 
         # plot
         series_x %>%
-            inner_join(series_y) %>%
+            inner_join(series_y, "date") %>%
             with({
                 op <- par(mar = c(4.5, 4.5, 3.5, 0.5))
 
-                title <- "Delta Correlation\n(%s, %s, %s, %s, %s, %s, %s, %s)" %>%
-                    sprintf(trimws(input$symbol_x),
-                            trimws(input$symbol_y),
-                            input$interval,
-                            input$date_start,
-                            input$date_end,
-                            input$element_a,
-                            input$element_b,
-                            input$offset_a)
-                print(title)
+                title <- "%s Correlation\n(%s, %s, %s, %s, %s, %s, %s, %s)" %>%
+                    sprintf(input$op_c,
+                            trimws(input$sym_c0),
+                            trimws(input$sym_c1),
+                            input$intr_c,
+                            input$d_c_start,
+                            input$d_c_end,
+                            input$minu,
+                            input$subt,
+                            input$offs_c)
 
                 plot(series_x, series_y, type = "n",
                      main = title,
-                     xlab = trimws(input$symbol_x),
-                     ylab = trimws(input$symbol_y))
+                     xlab = trimws(input$sym_c0),
+                     ylab = trimws(input$sym_c1))
 
                 abline(h = 0, v = 0, col = "grey70")
                 points(series_x, series_y, pch = 1)
@@ -337,7 +360,7 @@ server <- function(input, output) {
 
         # modeling
         series_x %>%
-            inner_join(series_y) %>%
+            inner_join(series_y, "date") %>%
             mutate(X = series_x,
                    Y = series_y) %>%
             lm(Y ~ X, .) %>%
@@ -356,9 +379,9 @@ server <- function(input, output) {
 
     f_df_h <- reactive({
         # scrape
-        input$symbol_h %>%
+        input$sym_h %>%
             parse_symbol() %>%
-            handle_get(input$date_start_h, input$date_end_h, input$interval_h)
+            handle_get(input$d_h_start, input$d_h_end, input$intr_h)
     })
 
     f_series_h <- reactive({
@@ -367,12 +390,18 @@ server <- function(input, output) {
 
         # transform
         minuend_h <- df_h %>%
-            pull(input$element_h)
+            pull(input$elem_h)
         subtrahend_h <- df_h %>%
-            pull(input$element_b) %>%
-            lag(input$offset_h)
+            pull(input$elem_h) %>%
+            lag(input$offs_h)
 
-        data.frame(date = df_h$date, series_h = minuend_h - subtrahend_h)
+        # difference is default
+        result <- minuend_h - subtrahend_h
+        if (input$op_h == "Change") {
+            result <- 100 * (minuend_h - subtrahend_h) / subtrahend_h
+        }
+
+        data.frame(date = df_h$date, series_h = result)
     })
 
     output$plot_h <- renderPlot(res = 90, {
@@ -384,21 +413,27 @@ server <- function(input, output) {
             with({
                 op <- par(mar = c(5.5, 4, 3.5, 0.5))
 
-                title <- "Delta Histogram\n(%s, %s, %s, %s, %s, %s, %s)" %>%
-                    sprintf(trimws(input$symbol_h),
+                title <- "%s Histogram\n(%s, %s, %s, %s, %s, %s, %s)" %>%
+                    sprintf(input$op_h,
+                            trimws(input$sym_h),
                             input$prob,
-                            input$interval_h,
-                            input$date_start_h,
-                            input$date_end_h,
-                            input$element_h,
-                            input$offset_h)
+                            input$intr_h,
+                            input$d_h_start,
+                            input$d_h_end,
+                            input$elem_h,
+                            input$offs_h)
 
-                tbl <- table(round(series_h))
-                key <- as.numeric(names(tbl))
+                ex <- optimize(function(ex) {
+                    tbl <- table(round((10 ^ ex) * series_h))
+                    abs(30 - length(tbl))
+                }, c(-2, 2))$minimum
+
+                tbl <- table(round((10 ^ ex) * series_h))
+                key <- round(as.numeric(names(tbl)) / (10 ^ ex), 2)
                 val <- as.numeric(tbl)
 
                 qua <- c(input$prob, 1 - input$prob)
-                rng <- quantile(na.omit(series_h), qua)
+                rng <- quantile(series_h, qua, na.rm = TRUE)
                 col <- ifelse(rng < 0, 2, 3)
 
                 # initiate plot
@@ -407,7 +442,8 @@ server <- function(input, output) {
                      xlab = "", ylab = "Count")
 
                 abline(v = 0, col = 4, lwd = 4)
-                axis(1, c(min(key), 0, max(key)))
+                axis(1, c(min(key), 0, max(key)),
+                     round(c(min(series_h, na.rm = TRUE), 0, max(series_h, na.rm = TRUE)), 1))
 
                 abline(v = rng, col = col, lwd = 4)
                 axis(1, rng, round(rng, 2), las = 2)
