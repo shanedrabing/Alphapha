@@ -32,8 +32,16 @@ TEXT_REFERENCE <- trimws("
 ")
 
 
-# FUNCTIONS
+# FUNCTIONS (GENERAL)
 
+
+concat <- function(..., sep = "", collapse = "") {
+    paste(..., sep = sep, collapse = collapse)
+}
+
+mysplit <- function(x, split) {
+    unlist(strsplit(x, split))
+}
 
 as_unix_time <- function(date) {
     date %>%
@@ -51,28 +59,9 @@ clean_names <- function(x) {
     return(x)
 }
 
-get_content <- function(url) {
-    url %>%
-        GET() %>%
-        content(na = "null")
-}
 
-get_yahoo <- function(url) {
-    url %>%
-        get_content() %>%
-        clean_names()
-}
+# FUNCTIONS (API)
 
-get_fred <- function(url) {
-    url %>%
-        GET() %>%
-        content() %>%
-        setNames(c("date", "close"))
-}
-
-concat <- function(..., sep = "", collapse = "") {
-    paste(..., sep = sep, collapse = collapse)
-}
 
 api_kwargs <- function(kwargs) {
     paste(names(kwargs), kwargs, sep = "=", collapse = "&")
@@ -97,9 +86,31 @@ api_fred <- function(sid) {
     api_format(CGI_FRED, c(id = sid))
 }
 
-mysplit <- function(x, split) {
-    unlist(strsplit(x, split))
+
+# FUNCTIONS (REQUESTS)
+
+
+mycontent <- function(x, ..., progress = FALSE, show_col_types = FALSE) {
+    content(x, ..., progress = progress, show_col_types = show_col_types)
 }
+
+get_yahoo <- function(url) {
+    url %>%
+        GET() %>%
+        mycontent(na = "null") %>%
+        clean_names()
+}
+
+get_fred <- function(url) {
+    url %>%
+        GET() %>%
+        mycontent() %>%
+        setNames(c("date", "close"))
+}
+
+
+# FUNCTIONS (ALPHALPHA)
+
 
 parse_symbol <- function(symbol) {
     pair <- symbol %>%
@@ -148,14 +159,16 @@ if (FALSE) {
 }
 
 
-# APP
+# FRONTEND
 
 
-# frontend
 ui <- navbarPage(
     "Alphalpha",
 
-    # change correlation
+
+    # CORRELATION
+
+
     tabPanel("Correlation", sidebarLayout(
         sidebarPanel(width = 2,
             # symbols
@@ -191,7 +204,10 @@ ui <- navbarPage(
         )
     )),
 
-    # delta histogram
+
+    # HISTOGRAM
+
+
     tabPanel("Histogram", sidebarLayout(
         sidebarPanel(width = 2,
             # symbols
@@ -225,8 +241,16 @@ ui <- navbarPage(
     ))
 )
 
-# backend
+
+# BACKEND
+
+
 server <- function(input, output) {
+
+
+    # CORRELATION
+
+
     f_df_x <- reactive({
         # scrape
         input$symbol_x %>%
@@ -239,13 +263,6 @@ server <- function(input, output) {
         input$symbol_y %>%
             parse_symbol() %>%
             handle_get(input$date_start, input$date_end, input$interval)
-    })
-
-    f_df_h <- reactive({
-        # scrape
-        input$symbol_h %>%
-            parse_symbol() %>%
-            handle_get(input$date_start_h, input$date_end_h, input$interval_h)
     })
 
     f_series_x <- reactive({
@@ -276,6 +293,74 @@ server <- function(input, output) {
         data.frame(date = df_y$date, series_y = minuend_y - subtrahend_y)
     })
 
+    output$plot_c <- renderPlot(res = 90, {
+        # react
+        series_x <- f_series_x()
+        series_y <- f_series_y()
+
+        # plot
+        series_x %>%
+            inner_join(series_y) %>%
+            with({
+                op <- par(mar = c(4.5, 4.5, 3.5, 0.5))
+
+                title <- "Delta Correlation\n(%s, %s, %s, %s, %s, %s, %s, %s)" %>%
+                    sprintf(trimws(input$symbol_x),
+                            trimws(input$symbol_y),
+                            input$interval,
+                            input$date_start,
+                            input$date_end,
+                            input$element_a,
+                            input$element_b,
+                            input$offset_a)
+                print(title)
+
+                plot(series_x, series_y, type = "n",
+                     main = title,
+                     xlab = trimws(input$symbol_x),
+                     ylab = trimws(input$symbol_y))
+
+                abline(h = 0, v = 0, col = "grey70")
+                points(series_x, series_y, pch = 1)
+
+                m <- lm(series_y ~ series_x)
+                abline(m, lwd = 2, col = 2)
+
+                par(op)
+            })
+    })
+
+    output$text_c_m <- renderText(sep = "\n", {
+        # react
+        series_x <- f_series_x()
+        series_y <- f_series_y()
+
+        # modeling
+        series_x %>%
+            inner_join(series_y) %>%
+            mutate(X = series_x,
+                   Y = series_y) %>%
+            lm(Y ~ X, .) %>%
+            summary() %>%
+            capture.output() %>%
+            "["(-(1:4))
+    })
+
+    output$text_c_s <- renderText(sep = "\n", {
+        TEXT_REFERENCE
+    })
+
+
+    # HISTOGRAM
+
+
+    f_df_h <- reactive({
+        # scrape
+        input$symbol_h %>%
+            parse_symbol() %>%
+            handle_get(input$date_start_h, input$date_end_h, input$interval_h)
+    })
+
     f_series_h <- reactive({
         # react
         df_h <- f_df_h()
@@ -288,31 +373,6 @@ server <- function(input, output) {
             lag(input$offset_h)
 
         data.frame(date = df_h$date, series_h = minuend_h - subtrahend_h)
-    })
-
-    output$plot_c <- renderPlot(res = 90, {
-        # react
-        series_x <- f_series_x()
-        series_y <- f_series_y()
-
-        # plot
-        series_x %>%
-            inner_join(series_y) %>%
-            with({
-                op <- par(mar = c(4.5, 4.5, 0.5, 0.5))
-
-                plot(series_x, series_y, type = "n",
-                     xlab = trimws(input$symbol_x),
-                     ylab = trimws(input$symbol_y))
-
-                abline(h = 0, v = 0, col = "grey70")
-                points(series_x, series_y, pch = 1)
-
-                m <- lm(series_y ~ series_x)
-                abline(m, lwd = 2, col = 2)
-
-                par(op)
-            })
     })
 
     output$plot_h <- renderPlot(res = 90, {
@@ -366,7 +426,7 @@ server <- function(input, output) {
         # data frame
         series_h %>%
             with({
-                p <- seq(0, 1, 0.04)
+                p <- seq(0, 1, 0.05)
                 q <- quantile(series_h, p, na.rm = TRUE)
 
                 p %>%
@@ -377,26 +437,10 @@ server <- function(input, output) {
             })
     })
 
-    output$text_c_m <- renderText(sep = "\n", {
-        # react
-        series_x <- f_series_x()
-        series_y <- f_series_y()
-
-        # modeling
-        series_x %>%
-            inner_join(series_y) %>%
-            mutate(X = series_x,
-                   Y = series_y) %>%
-            lm(Y ~ X, .) %>%
-            summary() %>%
-            capture.output() %>%
-            "["(-(1:4))
-    })
-
-    output$text_c_s <- renderText(sep = "\n", {
-        TEXT_REFERENCE
-    })
 }
 
-# run app
+
+# RUN APP
+
+
 shinyApp(ui, server)
