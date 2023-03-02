@@ -345,8 +345,7 @@ server <- function(input, output) {
                      ylab = trimws(input$sym_c1))
 
                 abline(h = 0, v = 0, col = "grey70")
-                points(series_c_x, series_c_y,
-                       pch = 16, cex = 3 / 4)
+                points(series_c_x, series_c_y)
 
                 fit <- lm(series_c_y ~ series_c_x)
                 coef <- fit$coefficients
@@ -431,14 +430,14 @@ server <- function(input, output) {
                      main = title,
                      xlab = "", ylab = "Count")
 
+                segments(key, 0, key, val, lwd = 20, lend = 2)
+
+                abline(v = rng, col = "white", lwd = 8)
+                abline(v = rng, col = col, lwd = 4)
+
                 axis(1, c(min(key), 0, max(key)),
                      round(c(min(series_h, na.rm = TRUE), 0, max(series_h, na.rm = TRUE)), 1))
-
-                abline(v = rng, col = col, lwd = 4, lty = 2)
                 axis(1, rng, round(rng, 2), las = 2)
-
-                segments(key, 0, key, val, lwd = 2, lend = 2)
-                points(key, val, pch = 18)
 
                 par(op)
             })
