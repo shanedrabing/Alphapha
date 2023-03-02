@@ -14,6 +14,7 @@ library(tibble)
 
 
 OHLC <- c("open", "high", "low", "close", "adj_close", "volume")
+INTERVALS <- c("1d", "1wk", "1mo")
 
 CGI_YAHOO <- "https://query1.finance.yahoo.com/v7/finance/download/%s?"
 CGI_FRED <- "https://fred.stlouisfed.org/graph/fredgraph.csv?"
@@ -30,6 +31,8 @@ TEXT_REFERENCE <- trimws("
  CL=F         ::  Crude Oil
  FRED:UNRATE  ::  Unemployment Rate
 ")
+
+CACHE <- list()
 
 
 # FUNCTIONS (GENERAL)
@@ -60,15 +63,6 @@ clean_names <- function(x) {
 }
 
 
-# FUNCTIONS (NORMALIZATION)
-
-
-minmax <- function(x, na.rm = TRUE) {
-    lo <- min(x, na.rm = na.rm)
-    (x - lo) / (max(x, na.rm = na.rm) - lo)
-}
-
-
 # FUNCTIONS (API)
 
 
@@ -80,9 +74,9 @@ api_format <- function(cgi, kwargs) {
     concat(cgi, api_kwargs(kwargs))
 }
 
-api_yahoo <- function(symbol, d_c_start, d_c_end, interval=c("1d", "1wk", "1mo")) {
-    kwargs <- c(period1 = as_unix_time(d_c_start),
-                period2 = as_unix_time(d_c_end),
+api_yahoo <- function(symbol, date_c0, date_c1, interval=INTERVALS) {
+    kwargs <- c(period1 = as_unix_time(date_c0),
+                period2 = as_unix_time(date_c1),
                 interval = interval,
                 events = "history")
 
@@ -133,20 +127,56 @@ parse_symbol <- function(symbol) {
 }
 
 handle_get <- function(
-    pair, d_c_start = NULL, d_c_end = NULL, interval = NULL) {
+    pair, date_c0 = NULL, date_c1 = NULL, interval = NULL) {
 
+    # split pair
     origin <- pair[1]
     symbol <- pair[2]
 
-    if (origin == "YAHOO") {
-        symbol %>%
-            api_yahoo(d_c_start, d_c_end, interval) %>%
-            get_yahoo()
-    } else if (origin == "FRED") {
-        symbol %>%
-            api_fred() %>%
-            get_fred()
+    # key for caching
+    key <- c(origin = origin,
+             symbol = symbol,
+             date_c0 = date_c0,
+             date_c1 = date_c1,
+             interval = interval) %>%
+           api_kwargs()
+
+    # scrape api
+    if (is.null(CACHE[[key]])) {
+        if (origin == "YAHOO") {
+            CACHE[[key]] <<- symbol %>%
+                api_yahoo(date_c0, date_c1, interval) %>%
+                get_yahoo()
+        } else if (origin == "FRED") {
+            CACHE[[key]] <<- symbol %>%
+                api_fred() %>%
+                get_fred()
+        }
     }
+
+    # assign cache to globals
+    assign("CACHE", CACHE, .GlobalEnv)
+    CACHE[[key]]
+}
+
+handle_series <- function(df, k0, k1, off, op, name) {
+    # transform
+    x <- df %>%
+        pull(k0)
+
+    y <- df %>%
+        pull(k1) %>%
+        lag(off)
+
+    # difference is default
+    if (op == "Difference") {
+        z <- x - y
+    } else if (op == "Change") {
+        z <- 100 * (x - y) / y
+    }
+
+    data.frame(df$date, z) %>%
+        setNames(c("date", name))
 }
 
 
@@ -158,12 +188,12 @@ if (FALSE) {
     input <- list()
     input$sym_c0 <- "AAPL"
     input$sym_c1 <- "FRED:LNS12300025"
-    input$d_c_start <- "2023-01-01"
-    input$d_c_end <- "2023-03-01"
+    input$date_c0 <- "2023-01-01"
+    input$date_c1 <- "2023-03-01"
     input$intr_c <- "1d"
-    input$minu <- "close"
-    input$subt <- "open"
-    input$offs_c <- 0
+    input$var_c0 <- "close"
+    input$var_c1 <- "open"
+    input$off_c <- 0
 }
 
 
@@ -195,18 +225,18 @@ ui <- navbarPage("Alphalpha",
             selectInput("op_c", "Operation", c("Change", "Difference")),
 
             # interval
-            selectInput("intr_c", "Interval", c("1d", "1wk", "1mo")),
+            selectInput("intr_c", "Interval", INTERVALS),
 
             # dates
-            dateInput("d_c_start", "Start and End",
+            dateInput("date_c0", "Start and End",
                       value = today() - 365, max = today()),
-            dateInput("d_c_end", NULL,
+            dateInput("date_c1", NULL,
                       max = today()),
 
             # variables
-            selectInput("minu", "Minuend", OHLC, "close"),
-            selectInput("subt", "Subtrahend and Offset", OHLC, "open"),
-            numericInput("offs_c", NULL, 0, 0, step = 1)
+            selectInput("var_c0", "Minuend", OHLC, "close"),
+            selectInput("var_c1", "Subtrahend and Offset", OHLC, "open"),
+            numericInput("off_c", NULL, 0, 0, step = 1)
         ),
         column(width = 10,
             column(width = 7,
@@ -214,9 +244,9 @@ ui <- navbarPage("Alphalpha",
             ),
             column(width = 5,
                 h3("Model Summary"),
-                verbatimTextOutput("text_c_m"),
+                verbatimTextOutput("text_c0"),
                 h3("Symbol Reference"),
-                verbatimTextOutput("text_c_s")
+                verbatimTextOutput("text_c1")
             )
         )
     )),
@@ -234,20 +264,20 @@ ui <- navbarPage("Alphalpha",
             selectInput("op_h", "Operation", c("Difference", "Change")),
 
             # probability
-            numericInput("prob", "Tail Probability", 0.1, 0, 0.5, 0.005),
+            numericInput("pr_h", "Tail Probability", 0.1, 0, 0.5, 0.005),
 
             # interval
-            selectInput("intr_h", "Interval", c("1d", "1wk", "1mo")),
+            selectInput("intr_h", "Interval", INTERVALS),
 
             # dates
-            dateInput("d_h_start", "Start and End",
+            dateInput("date_h0", "Start and End",
                       value = today() - 365, max = today()),
-            dateInput("d_h_end", NULL,
+            dateInput("date_h1", NULL,
                       max = today()),
 
             # variables
-            selectInput("elem_h", "Variable and Offset", OHLC, "close"),
-            numericInput("offs_h", NULL, 20, 0, step = 1)
+            selectInput("var_h", "Variable and Offset", OHLC, "close"),
+            numericInput("off_h", NULL, 20, 0, step = 1)
         ),
         column(width = 10,
             column(width = 10,
@@ -271,58 +301,20 @@ server <- function(input, output) {
     # CORRELATION
 
 
-    f_df_c_x <- reactive({
-        # scrape
+    f_series_c_x <- reactive({
         input$sym_c0 %>%
             parse_symbol() %>%
-            handle_get(input$d_c_start, input$d_c_end, input$intr_c)
-    })
-
-    f_df_c_y <- reactive({
-        # scrape
-        input$sym_c1 %>%
-            parse_symbol() %>%
-            handle_get(input$d_c_start, input$d_c_end, input$intr_c)
-    })
-
-    f_series_c_x <- reactive({
-        # react
-        df_c_x <- f_df_c_x()
-
-        # transform
-        minuend_x <- df_c_x %>%
-            pull(input$minu)
-        subtrahend_x <- df_c_x %>%
-            pull(input$subt) %>%
-            lag(input$offs_c)
-
-        # difference is default
-        result <- minuend_x - subtrahend_x
-        if (input$op_c == "Change") {
-            result <- 100 * (minuend_x - subtrahend_x) / subtrahend_x
-        }
-
-        data.frame(date = df_c_x$date, series_c_x = result)
+            handle_get(input$date_c0, input$date_c1, input$intr_c) %>%
+            handle_series(input$var_c0, input$var_c1,
+                          input$off_c, input$op_c, "series_c_x")
     })
 
     f_series_c_y <- reactive({
-        # react
-        df_c_y <- f_df_c_y()
-
-        # transform
-        minuend_y <- df_c_y %>%
-            pull(input$minu)
-        subtrahend_y <- df_c_y %>%
-            pull(input$subt) %>%
-            lag(input$offs_c)
-
-        # difference is default
-        result <- minuend_y - subtrahend_y
-        if (input$op_c == "Change") {
-            result <- 100 * (minuend_y - subtrahend_y) / subtrahend_y
-        }
-
-        data.frame(date = df_c_y$date, series_c_y = result)
+        input$sym_c1 %>%
+            parse_symbol() %>%
+            handle_get(input$date_c0, input$date_c1, input$intr_c) %>%
+            handle_series(input$var_c0, input$var_c1,
+                          input$off_c, input$op_c, "series_c_y")
     })
 
     output$plot_c <- renderPlot(res = 90, {
@@ -341,11 +333,11 @@ server <- function(input, output) {
                             trimws(input$sym_c0),
                             trimws(input$sym_c1),
                             input$intr_c,
-                            input$d_c_start,
-                            input$d_c_end,
-                            input$minu,
-                            input$subt,
-                            input$offs_c)
+                            input$date_c0,
+                            input$date_c1,
+                            input$var_c0,
+                            input$var_c1,
+                            input$off_c)
 
                 plot(series_c_x, series_c_y, type = "n",
                      main = title,
@@ -356,13 +348,15 @@ server <- function(input, output) {
                 points(series_c_x, series_c_y,
                        pch = 16, cex = 3 / 4)
 
-                m <- lm(series_c_y ~ series_c_x)
-                abline(m, lwd = 2, col = 2)
+                fit <- lm(series_c_y ~ series_c_x)
+                coef <- fit$coefficients
+
+                abline(fit, lwd = 2, col = 2)
 
                 legend(min(series_c_x, na.rm = TRUE),
                        max(series_c_y, na.rm = TRUE),
-                       c(sprintf("%.3fx + %.3f", m$coefficients[1],  m$coefficients[2]),
-                         sprintf("Rsq: %.3f", summary(m)$r.squared)),
+                       c(sprintf("%.3fx + %.3f", coef[1],  coef[2]),
+                         sprintf("Rsq: %.3f", summary(fit)$r.squared)),
                        bty = "n", text.col = 2, text.font = 2,
                        xjust = 0, yjust = 1)
 
@@ -370,7 +364,7 @@ server <- function(input, output) {
             })
     })
 
-    output$text_c_m <- renderText(sep = "\n", {
+    output$text_c0 <- renderText(sep = "\n", {
         # react
         series_c_x <- f_series_c_x()
         series_c_y <- f_series_c_y()
@@ -386,39 +380,18 @@ server <- function(input, output) {
             "["(-(1:4))
     })
 
-    output$text_c_s <- renderText(sep = "\n", {
-        TEXT_REFERENCE
-    })
+    output$text_c1 <- renderText(sep = "\n", TEXT_REFERENCE)
 
 
     # HISTOGRAM
 
 
-    f_df_h <- reactive({
-        # scrape
+    f_series_h <- reactive({
         input$sym_h %>%
             parse_symbol() %>%
-            handle_get(input$d_h_start, input$d_h_end, input$intr_h)
-    })
-
-    f_series_h <- reactive({
-        # react
-        df_h <- f_df_h()
-
-        # transform
-        minuend_h <- df_h %>%
-            pull(input$elem_h)
-        subtrahend_h <- df_h %>%
-            pull(input$elem_h) %>%
-            lag(input$offs_h)
-
-        # difference is default
-        result <- minuend_h - subtrahend_h
-        if (input$op_h == "Change") {
-            result <- 100 * (minuend_h - subtrahend_h) / subtrahend_h
-        }
-
-        data.frame(date = df_h$date, series_h = result)
+            handle_get(input$date_h0, input$date_h1, input$intr_h) %>%
+            handle_series(input$var_h, input$var_h,
+                          input$off_h, input$op_h, "series_h")
     })
 
     output$plot_h <- renderPlot(res = 90, {
@@ -433,12 +406,12 @@ server <- function(input, output) {
                 title <- "%s Histogram\n(%s, %s, %s, %s, %s, %s, %s)" %>%
                     sprintf(input$op_h,
                             trimws(input$sym_h),
-                            input$prob,
+                            input$pr_h,
                             input$intr_h,
-                            input$d_h_start,
-                            input$d_h_end,
-                            input$elem_h,
-                            input$offs_h)
+                            input$date_h0,
+                            input$date_h1,
+                            input$var_h,
+                            input$off_h)
 
                 ex <- optimize(function(ex) {
                     tbl <- table(round((10 ^ ex) * series_h))
@@ -449,7 +422,7 @@ server <- function(input, output) {
                 key <- round(as.numeric(names(tbl)) / (10 ^ ex), 2)
                 val <- as.numeric(tbl)
 
-                qua <- c(input$prob, 1 - input$prob)
+                qua <- c(input$pr_h, 1 - input$pr_h)
                 rng <- quantile(series_h, qua, na.rm = TRUE)
                 col <- ifelse(rng < 0, 2, 3)
 
@@ -472,21 +445,16 @@ server <- function(input, output) {
     })
 
     output$text_h <- renderText(sep = "\n", {
-        # react
-        series_h <- f_series_h()
+        with(f_series_h(), {
+            p <- seq(0, 1, 0.05)
+            q <- quantile(series_h, p, na.rm = TRUE)
 
-        # data frame
-        series_h %>%
-            with({
-                p <- seq(0, 1, 0.05)
-                q <- quantile(series_h, p, na.rm = TRUE)
-
-                p %>%
-                    cbind(q) %>%
-                    apply(1, function(x) {
-                        sprintf("%3.0f%% :: %7.2f", 100 * x[1], x[2])
-                    })
-            })
+            p %>%
+                cbind(q) %>%
+                apply(1, function(x) {
+                    sprintf("%3.0f%% :: %7.2f", 100 * x[1], x[2])
+                })
+        })
     })
 
 }
