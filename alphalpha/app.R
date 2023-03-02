@@ -60,6 +60,15 @@ clean_names <- function(x) {
 }
 
 
+# FUNCTIONS (NORMALIZATION)
+
+
+minmax <- function(x, na.rm = TRUE) {
+    lo <- min(x, na.rm = na.rm)
+    (x - lo) / (max(x, na.rm = na.rm) - lo)
+}
+
+
 # FUNCTIONS (API)
 
 
@@ -262,28 +271,28 @@ server <- function(input, output) {
     # CORRELATION
 
 
-    f_df_x <- reactive({
+    f_df_c_x <- reactive({
         # scrape
         input$sym_c0 %>%
             parse_symbol() %>%
             handle_get(input$d_c_start, input$d_c_end, input$intr_c)
     })
 
-    f_df_y <- reactive({
+    f_df_c_y <- reactive({
         # scrape
         input$sym_c1 %>%
             parse_symbol() %>%
             handle_get(input$d_c_start, input$d_c_end, input$intr_c)
     })
 
-    f_series_x <- reactive({
+    f_series_c_x <- reactive({
         # react
-        df_x <- f_df_x()
+        df_c_x <- f_df_c_x()
 
         # transform
-        minuend_x <- df_x %>%
+        minuend_x <- df_c_x %>%
             pull(input$minu)
-        subtrahend_x <- df_x %>%
+        subtrahend_x <- df_c_x %>%
             pull(input$subt) %>%
             lag(input$offs_c)
 
@@ -293,17 +302,17 @@ server <- function(input, output) {
             result <- 100 * (minuend_x - subtrahend_x) / subtrahend_x
         }
 
-        data.frame(date = df_x$date, series_x = result)
+        data.frame(date = df_c_x$date, series_c_x = result)
     })
 
-    f_series_y <- reactive({
+    f_series_c_y <- reactive({
         # react
-        df_y <- f_df_y()
+        df_c_y <- f_df_c_y()
 
         # transform
-        minuend_y <- df_y %>%
+        minuend_y <- df_c_y %>%
             pull(input$minu)
-        subtrahend_y <- df_y %>%
+        subtrahend_y <- df_c_y %>%
             pull(input$subt) %>%
             lag(input$offs_c)
 
@@ -313,17 +322,17 @@ server <- function(input, output) {
             result <- 100 * (minuend_y - subtrahend_y) / subtrahend_y
         }
 
-        data.frame(date = df_y$date, series_y = result)
+        data.frame(date = df_c_y$date, series_c_y = result)
     })
 
     output$plot_c <- renderPlot(res = 90, {
         # react
-        series_x <- f_series_x()
-        series_y <- f_series_y()
+        series_c_x <- f_series_c_x()
+        series_c_y <- f_series_c_y()
 
         # plot
-        series_x %>%
-            inner_join(series_y, "date") %>%
+        series_c_x %>%
+            inner_join(series_c_y, "date") %>%
             with({
                 op <- par(mar = c(4.5, 4.5, 3.5, 0.5))
 
@@ -338,16 +347,24 @@ server <- function(input, output) {
                             input$subt,
                             input$offs_c)
 
-                plot(series_x, series_y, type = "n",
+                plot(series_c_x, series_c_y, type = "n",
                      main = title,
                      xlab = trimws(input$sym_c0),
                      ylab = trimws(input$sym_c1))
 
                 abline(h = 0, v = 0, col = "grey70")
-                points(series_x, series_y, pch = 1)
+                points(series_c_x, series_c_y,
+                       pch = 16, cex = 3 / 4)
 
-                m <- lm(series_y ~ series_x)
+                m <- lm(series_c_y ~ series_c_x)
                 abline(m, lwd = 2, col = 2)
+
+                legend(min(series_c_x, na.rm = TRUE),
+                       max(series_c_y, na.rm = TRUE),
+                       c(sprintf("%.3fx + %.3f", m$coefficients[1],  m$coefficients[2]),
+                         sprintf("Rsq: %.3f", summary(m)$r.squared)),
+                       bty = "n", text.col = 2, text.font = 2,
+                       xjust = 0, yjust = 1)
 
                 par(op)
             })
@@ -355,14 +372,14 @@ server <- function(input, output) {
 
     output$text_c_m <- renderText(sep = "\n", {
         # react
-        series_x <- f_series_x()
-        series_y <- f_series_y()
+        series_c_x <- f_series_c_x()
+        series_c_y <- f_series_c_y()
 
         # modeling
-        series_x %>%
-            inner_join(series_y, "date") %>%
-            mutate(X = series_x,
-                   Y = series_y) %>%
+        series_c_x %>%
+            inner_join(series_c_y, "date") %>%
+            mutate(X = series_c_x,
+                   Y = series_c_y) %>%
             lm(Y ~ X, .) %>%
             summary() %>%
             capture.output() %>%
@@ -441,15 +458,14 @@ server <- function(input, output) {
                      main = title,
                      xlab = "", ylab = "Count")
 
-                abline(v = 0, col = 4, lwd = 4)
                 axis(1, c(min(key), 0, max(key)),
                      round(c(min(series_h, na.rm = TRUE), 0, max(series_h, na.rm = TRUE)), 1))
 
-                abline(v = rng, col = col, lwd = 4)
+                abline(v = rng, col = col, lwd = 4, lty = 2)
                 axis(1, rng, round(rng, 2), las = 2)
 
                 segments(key, 0, key, val, lwd = 2, lend = 2)
-                points(key, val, pch = 16)
+                points(key, val, pch = 18)
 
                 par(op)
             })
