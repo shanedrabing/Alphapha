@@ -5,20 +5,34 @@ library(dplyr)
 library(httr)
 library(lubridate)
 library(readr)
+library(readxl)
 library(rvest)
 library(shiny)
 library(tibble)
+library(zoo)
 
 
 # CONSTANTS
 
 
+# globals
+NAAIM <- NULL
+CACHE <- list()
+
+# colors
+RED <- rgb(1, 0, 0)
+GREEN <- rgb(0, 1, 0)
+BLUE <- rgb(0, 0, 1)
+
+# inputs
 OHLC <- c("open", "high", "low", "close", "adj_close", "volume")
 INTERVALS <- c("1d", "1wk", "1mo")
 
+# cgi urls
 CGI_YAHOO <- "https://query1.finance.yahoo.com/v7/finance/download/%s?"
 CGI_FRED <- "https://fred.stlouisfed.org/graph/fredgraph.csv?"
 
+# hints
 TEXT_REFERENCE <- trimws("
 ^GSPC         ::  S&P 500
 ^IXIC         ::  NASDAQ Composite
@@ -32,7 +46,13 @@ TEXT_REFERENCE <- trimws("
  FRED:UNRATE  ::  Unemployment Rate
 ")
 
-CACHE <- list()
+# xaxis
+MONTHS <- expand.grid(1970:2030, 1:12) %>%
+    apply(1, paste, collapse = "-") %>%
+    ym()
+
+MONTHS_FMT <- MONTHS %>%
+    lapply(function(x) sprintf("%04d-%02d", year(x), month(x)))
 
 
 # FUNCTIONS (GENERAL)
@@ -60,6 +80,14 @@ clean_names <- function(x) {
         tolower()
 
     return(x)
+}
+
+
+# FUNCTIONS (TA)
+
+
+sma <- function(x, n) {
+    rollmean(x, n, NA, align = "right")
 }
 
 
@@ -109,6 +137,29 @@ get_fred <- function(url) {
         GET() %>%
         mycontent() %>%
         setNames(c("date", "close"))
+}
+
+get_naaim <- function() {
+    if (is.null(NAAIM)) {
+        url <- "https://www.naaim.org/programs/naaim-exposure-index/" %>%
+            read_html() %>%
+            html_node("a[href*='/uploads/']") %>%
+            html_attr("href")
+
+        url %>%
+            download.file("/tmp.xlsx", mode = "wb", quiet = TRUE)
+
+        NAAIM <<- "/tmp.xlsx" %>%
+            read_excel() %>%
+            clean_names() %>%
+            mutate(date = as_date(date)) %>%
+            arrange(date)
+
+        file.remove("/tmp.xlsx")
+    }
+
+    assign("NAAIM", NAAIM, .GlobalEnv)
+    NAAIM
 }
 
 
@@ -276,8 +327,9 @@ ui <- navbarPage("Alphalpha",
                       max = today()),
 
             # variables
-            selectInput("var_h", "Variable and Offset", OHLC, "close"),
-            numericInput("off_h", NULL, 20, 0, step = 1)
+            selectInput("var_h0", "Minuend", OHLC, "close"),
+            selectInput("var_h1", "Subtrahend and Offset", OHLC, "close"),
+            numericInput("off_h", NULL, 1, 0, step = 1)
         ),
         column(width = 10,
             column(width = 10,
@@ -287,6 +339,33 @@ ui <- navbarPage("Alphalpha",
                 h3("Percentiles"),
                 verbatimTextOutput("text_h")
             )
+        )
+    )),
+
+
+    # SENTIMENT
+
+
+    tabPanel("Sentiment", sidebarLayout(
+        sidebarPanel(width = 2,
+            # symbols
+            textInput("sym_s", "Symbol", "^GSPC"),
+
+            # indicator
+            numericInput("ma_s0", "MA Symbol", 90, 0, step = 1),
+            numericInput("ma_s1", "MA NAAIM", 13, 0, step = 1),
+
+            # interval
+            selectInput("intr_s", "Interval", INTERVALS),
+
+            # dates
+            dateInput("date_s0", "Start and End",
+                      value = today() - 365, max = today()),
+            dateInput("date_s1", NULL,
+                      max = today()),
+        ),
+        column(width = 10,
+            plotOutput("plot_s", "100%", "85vh")
         )
     ))
 )
@@ -350,13 +429,13 @@ server <- function(input, output) {
                 fit <- lm(series_c_y ~ series_c_x)
                 coef <- fit$coefficients
 
-                abline(fit, lwd = 2, col = 2)
+                abline(fit, lwd = 2, col = RED)
 
                 legend(min(series_c_x, na.rm = TRUE),
                        max(series_c_y, na.rm = TRUE),
                        c(sprintf("%.3fx + %.3f", coef[1],  coef[2]),
                          sprintf("Rsq: %.3f", summary(fit)$r.squared)),
-                       bty = "n", text.col = 2, text.font = 2,
+                       bty = "n", text.col = RED, text.font = 2,
                        xjust = 0, yjust = 1)
 
                 par(op)
@@ -389,7 +468,7 @@ server <- function(input, output) {
         input$sym_h %>%
             parse_symbol() %>%
             handle_get(input$date_h0, input$date_h1, input$intr_h) %>%
-            handle_series(input$var_h, input$var_h,
+            handle_series(input$var_h0, input$var_h1,
                           input$off_h, input$op_h, "series_h")
     })
 
@@ -402,14 +481,15 @@ server <- function(input, output) {
             with({
                 op <- par(mar = c(5.5, 4, 3.5, 0.5))
 
-                title <- "%s Histogram\n(%s, %s, %s, %s, %s, %s, %s)" %>%
+                title <- "%s Histogram\n(%s, %s, %s, %s, %s, %s, %s, %s)" %>%
                     sprintf(input$op_h,
                             trimws(input$sym_h),
                             input$pr_h,
                             input$intr_h,
                             input$date_h0,
                             input$date_h1,
-                            input$var_h,
+                            input$var_h0,
+                            input$var_h1,
                             input$off_h)
 
                 ex <- optimize(function(ex) {
@@ -423,17 +503,15 @@ server <- function(input, output) {
 
                 qua <- c(input$pr_h, 1 - input$pr_h)
                 rng <- quantile(series_h, qua, na.rm = TRUE)
-                col <- ifelse(rng < 0, 2, 3)
+                col <- ifelse(rng < 0, RED, GREEN)
 
                 # initiate plot
                 plot(key, val, type = "n", xaxt = "n",
                      main = title,
                      xlab = "", ylab = "Count")
 
-                segments(key, 0, key, val, lwd = 20, lend = 2)
-
-                abline(v = rng, col = "white", lwd = 8)
-                abline(v = rng, col = col, lwd = 4)
+                segments(key, 0, key, val, lwd = 16, lend = 2)
+                abline(v = rng, col = col, lwd = 4, lty = 2, lend = 2)
 
                 axis(1, c(min(key), 0, max(key)),
                      round(c(min(series_h, na.rm = TRUE), 0, max(series_h, na.rm = TRUE)), 1))
@@ -456,6 +534,82 @@ server <- function(input, output) {
         })
     })
 
+
+    # SENTIMENT
+
+
+    output$plot_s <- renderPlot(res = 90, {
+        df <- input$sym_s %>%
+            parse_symbol() %>%
+            handle_get(ymd("1900-01-01"), today(), input$intr_s)
+
+        naaim <- get_naaim()
+
+        # plot
+        with(df, {
+            op <- par(mar = c(5.5, 5, 3.5, 5))
+
+            title <- "Sentiment Plot\n(%s, %s, %s, %s, %s, %s)" %>%
+                    sprintf(trimws(input$sym_s),
+                            input$ma_s0,
+                            input$ma_s1,
+                            input$intr_s,
+                            input$date_s0,
+                            input$date_s1)
+
+            # simple
+            xlim <- c(input$date_s0, input$date_s1)
+            ylim <-df %>%
+                filter(xlim[1] <= date,
+                       date <= xlim[2]) %>%
+                with(c(min(low, na.rm = TRUE), max(high, na.rm = TRUE)))
+
+            # sentiment
+            vec <- naaim$mean_average
+            lo <- min(vec, na.rm = TRUE)
+            hi <- max(vec, na.rm = TRUE)
+
+            # zero-one norm, scaled
+            one <- (vec - lo) / (hi - lo)
+            scl <- (ylim[2] - ylim[1]) * one + ylim[1]
+
+            # axis math
+            yaxt0 <- seq(min(ylim), max(ylim), length.out = 6)
+            yaxt1 <- seq(min(scl), max(scl), length.out = 6)
+            yaxt1_fmt <- seq(min(vec), max(vec), length.out = 6)
+
+            # series
+            x <- (open + close) / 2
+
+            # plot init
+            plot(xlim, ylim, type = "n",
+                 xaxt = "n", yaxt = "n",
+                 xlab = "", ylab = trimws(input$sym_s),
+                 main = title)
+
+            # plot averages
+            if (input$ma_s1 != 0)
+                lines(naaim$date, sma(scl, input$ma_s1),
+                      col = rgb(1, 0, 0, 0.33),
+                      lty = 3, lwd = 2)
+            if (input$ma_s0 != 0)
+                lines(date, sma(x, input$ma_s0),
+                      col = rgb(0, 0, 0, 0.33),
+                      lty = 3, lwd = 2)
+
+            # plot series
+            lines(naaim$date, scl, lwd = 2, col = RED)
+            lines(date, x, lwd = 2, col = rgb(0, 0, 0))
+
+            # plot axes
+            mtext("NAAIM", side = 4, line = 3)
+            axis(1, MONTHS, MONTHS_FMT, las = 2)
+            axis(2, yaxt0, as.numeric(sprintf("%.2e", yaxt0)))
+            axis(4, yaxt1, as.numeric(sprintf("%.2e", yaxt1_fmt)))
+
+            par(op)
+        })
+    })
 }
 
 
