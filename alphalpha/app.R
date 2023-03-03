@@ -147,15 +147,15 @@ get_naaim <- function() {
             html_attr("href")
 
         url %>%
-            download.file("/tmp.xlsx", mode = "wb", quiet = TRUE)
+            download.file("./tmp.xlsx", mode = "wb", quiet = TRUE)
 
-        NAAIM <<- "/tmp.xlsx" %>%
+        NAAIM <<- "./tmp.xlsx" %>%
             read_excel() %>%
             clean_names() %>%
             mutate(date = as_date(date)) %>%
             arrange(date)
 
-        file.remove("/tmp.xlsx")
+        file.remove("./tmp.xlsx")
     }
 
     assign("NAAIM", NAAIM, .GlobalEnv)
