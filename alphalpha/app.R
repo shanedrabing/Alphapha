@@ -32,6 +32,9 @@ INTERVALS <- c("1d", "1wk", "1mo")
 CGI_YAHOO <- "https://query1.finance.yahoo.com/v7/finance/download/%s?"
 CGI_FRED <- "https://fred.stlouisfed.org/graph/fredgraph.csv?"
 
+# user agents
+AGENTS <- c("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36 Edge/12.1")
+
 # hints
 TEXT_REFERENCE <- trimws("
 ^GSPC         ::  S&P 500
@@ -117,6 +120,10 @@ api_fred <- function(sid) {
     api_format(CGI_FRED, c(id = sid))
 }
 
+ua_random <- function() {
+    user_agent(sample(AGENTS, 1))
+}
+
 
 # FUNCTIONS (REQUESTS)
 
@@ -127,14 +134,14 @@ mycontent <- function(x, ..., progress = FALSE, show_col_types = FALSE) {
 
 get_yahoo <- function(url) {
     url %>%
-        GET() %>%
+        GET(ua_random()) %>%
         mycontent(na = "null") %>%
         clean_names()
 }
 
 get_fred <- function(url) {
     url %>%
-        GET() %>%
+        GET(ua_random()) %>%
         mycontent() %>%
         setNames(c("date", "close"))
 }
@@ -204,6 +211,9 @@ handle_get <- function(
                 get_fred()
         }
     }
+
+    print(key)
+    print(CACHE[[key]])
 
     # assign cache to globals
     assign("CACHE", CACHE, .GlobalEnv)
