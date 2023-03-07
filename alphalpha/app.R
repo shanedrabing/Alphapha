@@ -477,52 +477,54 @@ server <- function(input, output) {
         series_h <- f_series_h()
 
         # plot
-        series_h %>%
-            with({
-                op <- par(mar = c(5.5, 4, 3.5, 0.5))
+        with(series_h, {
+            op <- par(mar = c(5.5, 4, 3.5, 0.5))
 
-                title <- "%s Histogram\n(%s, %s, %s, %s, %s, %s, %s, %s)" %>%
-                    sprintf(input$op_h,
-                            trimws(input$sym_h),
-                            input$pr_h,
-                            input$intr_h,
-                            input$date_h0,
-                            input$date_h1,
-                            input$var_h0,
-                            input$var_h1,
-                            input$off_h)
+            title <- "%s Histogram\n(%s, %s, %s, %s, %s, %s, %s, %s)" %>%
+                sprintf(input$op_h,
+                        trimws(input$sym_h),
+                        input$pr_h,
+                        input$intr_h,
+                        input$date_h0,
+                        input$date_h1,
+                        input$var_h0,
+                        input$var_h1,
+                        input$off_h)
 
-                ex <- optimize(function(ex) {
-                    tbl <- table(round((10 ^ ex) * series_h))
-                    abs(30 - length(tbl))
-                }, c(-2, 2))$minimum
-
+            ex <- optimize(function(ex) {
                 tbl <- table(round((10 ^ ex) * series_h))
-                key <- round(as.numeric(names(tbl)) / (10 ^ ex), 2)
-                val <- as.numeric(tbl)
+                abs(30 - length(tbl))
+            }, c(-2, 2))$minimum
 
-                qua <- c(input$pr_h, 1 - input$pr_h)
-                rng <- quantile(series_h, qua, na.rm = TRUE)
-                col <- ifelse(rng < 0, RED, GREEN)
+            tbl <- table(round((10 ^ ex) * series_h))
+            key <- round(as.numeric(names(tbl)) / (10 ^ ex), 2)
+            val <- as.numeric(tbl)
 
-                # initiate plot
-                plot(key, val, type = "n", xaxt = "n",
-                     main = title,
-                     xlab = "", ylab = "Count")
+            qua <- c(input$pr_h, 1 - input$pr_h)
+            rng <- quantile(series_h, qua, na.rm = TRUE)
+            col <- ifelse(rng < 0, RED, GREEN)
 
-                segments(key, 0, key, val, lwd = 16, lend = 2)
-                abline(v = rng, col = col, lwd = 4, lty = 2, lend = 2)
+            # initiate plot
+            plot(key, val, type = "n", xaxt = "n",
+                 main = title,
+                 xlab = "", ylab = "Count")
 
-                axis(1, c(min(key), 0, max(key)),
-                     round(c(min(series_h, na.rm = TRUE), 0, max(series_h, na.rm = TRUE)), 1))
-                axis(1, rng, round(rng, 2), las = 2)
+            segments(key, 0, key, val, lwd = 16, lend = 2)
+            abline(v = rng, col = col, lwd = 4, lty = 2, lend = 2)
 
-                par(op)
-            })
+            axis(1, c(min(key), 0, max(key)),
+                 round(c(min(series_h, na.rm = TRUE), 0, max(series_h, na.rm = TRUE)), 1))
+            axis(1, rng, round(rng, 2), las = 2)
+
+            par(op)
+        })
     })
 
     output$text_h <- renderText(sep = "\n", {
-        with(f_series_h(), {
+        # react
+        series_h <- f_series_h()
+
+        with(series_h, {
             p <- seq(0, 1, 0.05)
             q <- quantile(series_h, p, na.rm = TRUE)
 
