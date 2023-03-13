@@ -23,10 +23,12 @@ CACHE <- list()
 RED <- rgb(1, 0, 0)
 GREEN <- rgb(0, 1, 0)
 BLUE <- rgb(0, 0, 1)
+GREY <- "grey70"
 
 # inputs
 OHLC <- c("open", "high", "low", "close", "adj_close", "volume")
 INTERVALS <- c("1d", "1wk", "1mo")
+OPERATION <- c("Change", "Difference")
 
 # cgi urls
 CGI_YAHOO <- "https://query1.finance.yahoo.com/v7/finance/download/%s?"
@@ -216,11 +218,6 @@ handle_get <- function(
         }
     }
 
-    if (typeof(CACHE[[key]]) == "list") {
-        print(key)
-        print(CACHE[[key]])
-    }
-
     # assign cache to globals
     assign("CACHE", CACHE, .GlobalEnv)
     CACHE[[key]]
@@ -289,7 +286,7 @@ ui <- navbarPage("Alphalpha",
             textInput("sym_c1", NULL, "QQQ"),
 
             # operation
-            selectInput("op_c", "Operation", c("Change", "Difference")),
+            selectInput("op_c", "Operation", OPERATION),
 
             # interval
             selectInput("intr_c", "Interval", INTERVALS),
@@ -302,8 +299,8 @@ ui <- navbarPage("Alphalpha",
 
             # variables
             selectInput("var_c0", "Minuend", OHLC, "close"),
-            selectInput("var_c1", "Subtrahend and Offset", OHLC, "open"),
-            numericInput("off_c", NULL, 0, 0, step = 1)
+            selectInput("var_c1", "Subtrahend and Offset", OHLC, "close"),
+            numericInput("off_c", NULL, 1, 0, step = 1)
         ),
         column(width = 10,
             column(width = 7,
@@ -328,24 +325,24 @@ ui <- navbarPage("Alphalpha",
             textInput("sym_h", "Symbol", "AAPL"),
 
             # operation
-            selectInput("op_h", "Operation", c("Difference", "Change")),
+            selectInput("op_h", "Operation", OPERATION),
 
             # probability
-            numericInput("pr_h", "Tail Probability", 0.1, 0, 0.5, 0.005),
+            numericInput("pr_h", "Tail Probability", 0.1, 0, 0.5, 0.0025),
 
             # interval
             selectInput("intr_h", "Interval", INTERVALS),
 
             # dates
             dateInput("date_h0", "Start and End",
-                      value = today() - 365, max = today()),
+                      value = today() - 3 * 365, max = today()),
             dateInput("date_h1", NULL,
                       max = today()),
 
             # variables
             selectInput("var_h0", "Minuend", OHLC, "close"),
-            selectInput("var_h1", "Subtrahend and Offset", OHLC, "close"),
-            numericInput("off_h", NULL, 1, 0, step = 1)
+            selectInput("var_h1", "Subtrahend and Offset", OHLC, "open"),
+            numericInput("off_h", NULL, 0, 0, step = 1)
         ),
         column(width = 10,
             column(width = 10,
@@ -439,7 +436,7 @@ server <- function(input, output) {
                      xlab = trimws(input$sym_c0),
                      ylab = trimws(input$sym_c1))
 
-                abline(h = 0, v = 0, col = "grey70")
+                abline(h = 0, v = 0, col = GREY)
                 points(series_c_x, series_c_y)
 
                 fit <- lm(series_c_y ~ series_c_x)
@@ -449,7 +446,7 @@ server <- function(input, output) {
 
                 legend(min(series_c_x, na.rm = TRUE),
                        max(series_c_y, na.rm = TRUE),
-                       c(sprintf("%.3fx + %.3f", coef[1],  coef[2]),
+                       c(sprintf("%.3fx + %.3f", coef[2],  coef[1]),
                          sprintf("Rsq: %.3f", summary(fit)$r.squared)),
                        bty = "n", text.col = RED, text.font = 2,
                        xjust = 0, yjust = 1)
@@ -507,30 +504,18 @@ server <- function(input, output) {
                         input$var_h1,
                         input$off_h)
 
-            ex <- optimize(function(ex) {
-                tbl <- table(round((10 ^ ex) * series_h))
-                abs(30 - length(tbl))
-            }, c(-2, 2))$minimum
-
-            tbl <- table(round((10 ^ ex) * series_h))
-            key <- round(as.numeric(names(tbl)) / (10 ^ ex), 2)
-            val <- as.numeric(tbl)
-
             qua <- c(input$pr_h, 1 - input$pr_h)
             rng <- quantile(series_h, qua, na.rm = TRUE)
             col <- ifelse(rng < 0, RED, GREEN)
 
-            # initiate plot
-            plot(key, val, type = "n", xaxt = "n",
-                 main = title,
-                 xlab = "", ylab = "Count")
+            series_h %>%
+                na.omit() %>%
+                density(adjust = 0.33) %>%
+                plot(xlim = range(series_h, na.rm = TRUE),
+                     main = title, xlab = "")
 
-            segments(key, 0, key, val, lwd = 16, lend = 2)
-            abline(v = rng, col = col, lwd = 4, lty = 2, lend = 2)
-
-            axis(1, c(min(key), 0, max(key)),
-                 round(c(min(series_h, na.rm = TRUE), 0, max(series_h, na.rm = TRUE)), 1))
-            axis(1, rng, round(rng, 2), las = 2)
+            abline(v = rng, col = col, lwd = 2)
+            axis(1, rng, round(rng, 2), las = 2, hadj = 1.8)
 
             par(op)
         })
