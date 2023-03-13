@@ -23,7 +23,10 @@ CACHE <- list()
 RED <- rgb(1, 0, 0)
 GREEN <- rgb(0, 1, 0)
 BLUE <- rgb(0, 0, 1)
-GREY <- "grey70"
+GREY95 <- "grey95"
+GREY90 <- "grey90"
+GREY85 <- "grey85"
+GREY70 <- "grey70"
 
 # inputs
 OHLC <- c("open", "high", "low", "close", "adj_close", "volume")
@@ -55,13 +58,49 @@ TEXT_REFERENCE <- trimws("
  FRED:UNRATE  ::  Unemployment Rate
 ")
 
+# time
+UNIX_DAY <- 86400
+UNIX_1900_1970 <- 25567
+
 # xaxis
-MONTHS <- expand.grid(1970:2030, 1:12) %>%
+MONTHS <- expand.grid(1850:2030, 1:12) %>%
     apply(1, paste, collapse = "-") %>%
     ym()
 
 MONTHS_FMT <- MONTHS %>%
     lapply(function(x) sprintf("%04d-%02d", year(x), month(x)))
+
+YEARS <- 1850:2030 %>%
+    expand.grid(1) %>%
+    apply(1, paste, collapse = "-") %>%
+    ym()
+
+YEARS_5 <- seq(1850, 2030, 5) %>%
+    expand.grid(1) %>%
+    apply(1, paste, collapse = "-") %>%
+    ym()
+
+YEARS_5_FMT <- YEARS_5 %>%
+    year() %>%
+    paste()
+
+YEARS_0 <- YEARS %>%
+    setdiff(YEARS_5)
+
+# yaxis
+PRICES <- 0:9 %>%
+    lapply("*", 10 ^ (0:3)) %>%
+    unlist() %>%
+    unique() %>%
+    sort()
+
+PRICES_1 <- PRICES %>%
+    paste() %>%
+    "["(startsWith(., "1")) %>%
+    as.integer()
+
+PRICES_0 <- PRICES %>%
+    setdiff(PRICES_1)
 
 
 # FUNCTIONS (GENERAL)
@@ -75,10 +114,22 @@ mysplit <- function(x, split) {
     unlist(strsplit(x, split))
 }
 
-as_unix_time <- function(date) {
+as_unix_time <- function(date, origin = "1970-01-01") {
     date %>%
-        as.POSIXct(origin = "1970-01-01", tz="UTC") %>%
+        as.POSIXct(origin = origin, tz="UTC") %>%
         as.numeric()
+}
+
+as_unix_day <- function(date, origin = "1970-01-01") {
+    day_orig <- origin %>%
+        as_unix_time() %>%
+        "/"(UNIX_DAY)
+
+    day_date <- date %>%
+        as_unix_time(origin) %>%
+        "/"(UNIX_DAY)
+
+    day_date - day_orig
 }
 
 clean_names <- function(x) {
@@ -89,6 +140,18 @@ clean_names <- function(x) {
         tolower()
 
     return(x)
+}
+
+breakpoints <- function(x) {
+    lower <- x %>%
+        sub("\\((.+),.*", "\\1", .) %>%
+        as.numeric()
+
+    upper <- x %>%
+        sub("[^,]*,([^]]*)\\]", "\\1", .) %>%
+        as.numeric()
+
+    data.frame(lower, upper)
 }
 
 
@@ -356,6 +419,44 @@ ui <- navbarPage("Alphalpha",
     )),
 
 
+    # LOG-LOG
+
+
+    tabPanel("Log-Log", sidebarLayout(
+        sidebarPanel(width = 2,
+            # symbols
+            textInput("sym_l", "Symbol", "DHR"),
+
+            # log view
+            selectInput("log_lv", "Log View", c("xy", "y", "x", "none")),
+
+            # log model
+            selectInput("log_lm", "Log Model", c("xy", "y", "x", "none")),
+
+            # interval
+            selectInput("intr_l", "Interval", INTERVALS, "1wk"),
+
+            # dates
+            dateInput("date_l0", "Start and End",
+                      value = today() - round(40 * 365.25), max = today()),
+            dateInput("date_l1", NULL,
+                      max = today()),
+
+            # model origin
+            dateInput("date_lo", "Model Origin",
+                      value = "1965-01-01", max = today())
+        ),
+        column(width = 10,
+            column(width = 10,
+                plotOutput("plot_l0", "100%", "85vh")
+            ),
+            column(width = 2,
+                plotOutput("plot_l1", "100%", "85vh")
+            )
+        )
+    )),
+
+
     # SENTIMENT
 
 
@@ -436,7 +537,7 @@ server <- function(input, output) {
                      xlab = trimws(input$sym_c0),
                      ylab = trimws(input$sym_c1))
 
-                abline(h = 0, v = 0, col = GREY)
+                abline(h = 0, v = 0, col = GREY70)
                 points(series_c_x, series_c_y)
 
                 fit <- lm(series_c_y ~ series_c_x)
@@ -506,14 +607,13 @@ server <- function(input, output) {
 
             qua <- c(input$pr_h, 1 - input$pr_h)
             rng <- quantile(series_h, qua, na.rm = TRUE)
-            col <- ifelse(rng < 0, RED, GREEN)
+            col <- ifelse(rng < 0, RED, BLUE)
 
             series_h %>%
-                na.omit() %>%
-                density(adjust = 0.33) %>%
-                plot(xlim = range(series_h, na.rm = TRUE),
-                     main = title, xlab = "")
+                cut(20) %>%
+                plot(main = title, xlab = "")
 
+            abline(v = 0, col = GREY70)
             abline(v = rng, col = col, lwd = 2)
             axis(1, rng, round(rng, 2), las = 2, hadj = 1.8)
 
@@ -534,6 +634,125 @@ server <- function(input, output) {
                 apply(1, function(x) {
                     sprintf("%3.0f%% :: %7.2f", 100 * x[1], x[2])
                 })
+        })
+    })
+
+
+    # LOG-LOG
+
+
+    f_df_l <- reactive({
+        input$sym_l %>%
+            parse_symbol() %>%
+            handle_get(input$date_l0, input$date_l1, input$intr_l)
+    })
+
+    f_m <- reactive({
+        df <- f_df_l()
+        origin <- paste(input$date_lo)
+
+        if (input$log_lm == "xy") {
+            fit <- lm(log(close) ~ log(as_unix_day(date, origin)), df)
+        } else if (input$log_lm == "y") {
+            fit <- lm(log(close) ~ as_unix_day(date, origin), df)
+        } else if (input$log_lm == "x") {
+            fit <- lm(close ~ log(as_unix_day(date, origin)), df)
+        } else {
+            fit <- lm(close ~ as_unix_day(date, origin), df)
+        }
+
+        if (grepl("y", input$log_lm)) {
+            close_fit <- exp(predict(fit, df))
+        } else {
+            close_fit <- predict(fit, df)
+        }
+
+        list(fit = fit, close_fit = close_fit)
+    })
+
+    output$plot_l0 <- renderPlot(res = 90, {
+        df <- f_df_l()
+        m <- f_m()
+        fit <- m$fit
+        close_fit <- m$close_fit
+
+        with(df, {
+            op <- par(mar = c(3, 4, 3.5, 0.5))
+
+            lv <- ifelse(input$log_lv == "none", "", input$log_lv)
+
+
+            m <- coef(fit)[2]
+            b <- coef(fit)[1]
+            r <- summary(fit)$r.squared
+
+            p <- coef(summary(fit))[2, 4]
+            sig <- case_when(p < 0.001 ~ "***",
+                             p < 0.01 ~ "**",
+                             p < 0.05 ~ "*",
+                             p < 0.1 ~ ".",
+                             TRUE ~ "")
+
+            eq <- sprintf("%.3fx + %.3f", m, b)
+            rsq <- sprintf("(Rsq %.4f) %s", r, sig)
+
+            title <- "Log-Log Plot\n(%s, %s, %s, %s, %s, %s, %s)" %>%
+                sprintf(trimws(input$sym_l),
+                        input$log_lv,
+                        input$log_lm,
+                        input$intr_l,
+                        input$date_l0,
+                        input$date_l1,
+                        input$date_lo)
+
+            plot(date, close, type = "n", log = lv,
+                 xaxt = "n", las = 1,
+                 xlab = "", ylab = "",
+                 main = title)
+
+            abline(h = PRICES_0, v = YEARS_0, col = GREY90)
+            abline(h = PRICES_1, v = YEARS_5, col = GREY70)
+            axis(1, YEARS_5, YEARS_5_FMT)
+
+            legend(min(date, na.rm = TRUE), max(close, na.rm = TRUE),
+                   c(eq, rsq), lwd = c(2, 0), col = RED)
+
+            lines(date, close)
+            lines(date, close_fit, col = RED, lwd = 2)
+
+            par(op)
+        })
+    })
+
+    output$plot_l1 <- renderPlot(res = 90, {
+        df <- f_df_l()
+        m <- f_m()
+        fit <- m$fit
+        close_fit <- m$close_fit
+
+        with(df, {
+            op <- par(mar = c(3, 2, 3.5, 0.5))
+
+            error <- (close - close_fit) / close_fit
+            last <- tail(error, 1)
+
+            tbl <- error %>%
+                cut(20) %>%
+                table()
+
+            brk <- breakpoints(names(tbl))
+
+            plot(c(0, max(tbl)), c(min(brk$lower), max(brk$upper)),
+                 type = "n", las = 3, main = "Distribution")
+            rect(0, brk$lower, tbl, brk$upper, col = GREY90)
+
+            abline(h = last, col = RED, lwd = 2)
+            legend(max(tbl, na.rm = TRUE) / 2, max(error, na.rm = TRUE),
+                   sprintf("p = %.3f", ecdf(error)(last)),
+                   xjust = 0.5, col = RED, lwd = 2,
+                   box.col = NA, bg = NA)
+
+            par(op)
         })
     })
 
