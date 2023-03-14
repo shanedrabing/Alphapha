@@ -23,9 +23,7 @@ CACHE <- list()
 RED <- rgb(1, 0, 0)
 GREEN <- rgb(0, 1, 0)
 BLUE <- rgb(0, 0, 1)
-GREY95 <- "grey95"
 GREY90 <- "grey90"
-GREY85 <- "grey85"
 GREY70 <- "grey70"
 TRANSPARENT <- "#00000000"
 
