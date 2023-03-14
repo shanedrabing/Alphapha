@@ -27,6 +27,7 @@ GREY95 <- "grey95"
 GREY90 <- "grey90"
 GREY85 <- "grey85"
 GREY70 <- "grey70"
+TRANSPARENT <- "#00000000"
 
 # inputs
 OHLC <- c("open", "high", "low", "close", "adj_close", "volume")
@@ -592,7 +593,7 @@ server <- function(input, output) {
 
         # plot
         with(series_h, {
-            op <- par(mar = c(5.5, 4, 3.5, 0.5))
+            op <- par(mar = c(5.5, 4.5, 3.5, 0.5))
 
             title <- "%s Histogram\n(%s, %s, %s, %s, %s, %s, %s, %s)" %>%
                 sprintf(input$op_h,
@@ -609,11 +610,17 @@ server <- function(input, output) {
             rng <- quantile(series_h, qua, na.rm = TRUE)
             col <- ifelse(rng < 0, RED, BLUE)
 
-            series_h %>%
-                cut(20) %>%
-                plot(main = title, xlab = "")
+            tbl <- series_h %>%
+                cut(30) %>%
+                table()
 
-            abline(v = 0, col = GREY70)
+            brk <- breakpoints(names(tbl))
+
+            plot(c(min(brk$lower), max(brk$upper)), c(0, max(tbl)),
+                 type = "n", las = 3, main = title,
+                 xlab = "", ylab = "Count")
+            rect(brk$lower, 0, brk$upper, tbl, col = TRANSPARENT)
+
             abline(v = rng, col = col, lwd = 2)
             axis(1, rng, round(rng, 2), las = 2, hadj = 1.8)
 
@@ -744,7 +751,7 @@ server <- function(input, output) {
 
             plot(c(0, max(tbl)), c(min(brk$lower), max(brk$upper)),
                  type = "n", las = 3, main = "Distribution")
-            rect(0, brk$lower, tbl, brk$upper, col = GREY90)
+            rect(0, brk$lower, tbl, brk$upper, col = TRANSPARENT)
 
             abline(h = last, col = RED, lwd = 2)
             legend(max(tbl, na.rm = TRUE) / 2, max(error, na.rm = TRUE),
