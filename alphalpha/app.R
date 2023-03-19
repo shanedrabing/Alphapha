@@ -161,6 +161,10 @@ sma <- function(x, n) {
     rollmean(x, n, NA, align = "right")
 }
 
+relerr <- function(a, b) {
+    100 * (b - a) / a
+}
+
 
 # FUNCTIONS (API)
 
@@ -378,6 +382,40 @@ ui <- navbarPage("Alphalpha",
     )),
 
 
+    # CHANGE
+
+
+    tabPanel("Change", sidebarLayout(
+        sidebarPanel(width = 2,
+            # symbols
+            textInput("sym_y", "Symbol", "NVDA"),
+
+            # interval
+            selectInput("intr_y", "Interval", INTERVALS, "1d"),
+
+            # offset
+            numericInput("off_y", "Offset", 200, 0, step = 1),
+
+            # window
+            numericInput("len_y", "MA Length", 90, 0, step = 1),
+
+            # dates
+            dateInput("date_y0", "Start and End",
+                      value = today() - round(10 * 365.25), max = today()),
+            dateInput("date_y1", NULL,
+                      max = today()),
+        ),
+        column(width = 10,
+            column(width = 10,
+                plotOutput("plot_y0", "100%", "85vh")
+            ),
+            column(width = 2,
+                plotOutput("plot_y1", "100%", "85vh")
+            )
+        )
+    )),
+
+
     # HISTOGRAM
 
 
@@ -427,7 +465,7 @@ ui <- navbarPage("Alphalpha",
             textInput("sym_l", "Symbol", "DHR"),
 
             # log view
-            selectInput("log_lv", "Log View", c("xy", "y", "x", "none")),
+            selectInput("log_lv", "Log View", c("xy", "y", "x", "none"), "y"),
 
             # log model
             selectInput("log_lm", "Log Model", c("xy", "y", "x", "none")),
@@ -574,6 +612,91 @@ server <- function(input, output) {
     output$text_c1 <- renderText(sep = "\n", TEXT_REFERENCE)
 
 
+    # CHANGE
+
+
+    f_df_y <- reactive({
+        input$sym_y %>%
+            parse_symbol() %>%
+            handle_get(ymd("1900-01-01"), today(), input$intr_y)
+    })
+
+    output$plot_y0 <- renderPlot(res = 90, {
+        df <- f_df_y()
+
+        with(df, {
+            op <- par(mar = c(3, 4, 3.5, 0.5))
+
+            title <- "Change Plot\n(%s, %s, %s, %s, %s, %s)" %>%
+                sprintf(trimws(input$sym_y),
+                        input$intr_y,
+                        input$off_y,
+                        input$len_y,
+                        input$date_y0,
+                        input$date_y1)
+
+            major <- seq(-100, 1000, 50)
+            minor <- setdiff(seq(-100, 1000, 10), major)
+
+            x <- relerr(lag(close, input$off_y), close)
+            i <- (input$date_y0 <= date) & (date < input$date_y1)
+
+            plot(date[i], x[i], type = "n",
+                 ylab = "Percent Change",
+                 main = title)
+
+            abline(h = minor, v = YEARS_0, col = GREY90)
+            abline(h = major, v = YEARS_5, col = GREY70)
+            abline(h = 0, v = input$date_y1, col = "lightblue3", lwd = 2)
+
+            lines(date, x)
+
+            if (input$len_y != 0) {
+                m <- rollmean(x, input$len_y, NA, align = "right")
+                lines(date, m, col = RED, lwd = 2)
+            }
+
+            par(op)
+        })
+    })
+
+    output$plot_y1 <- renderPlot(res = 90, {
+        df <- f_df_y()
+
+        with(df, {
+            op <- par(mar = c(3, 2, 3.5, 0.5))
+
+            i <- (ymd(input$date_y0) <= date) & (date < ymd(input$date_y1))
+
+            error <- relerr(lag(close, input$off_y), close)[i]
+            last <- tail(error, 1)
+
+            med <- median(error, na.rm = TRUE)
+            mu <- mean(error, na.rm = TRUE)
+            sig <- sd(error, na.rm = TRUE)
+
+            tbl <- error %>%
+                cut(20) %>%
+                table()
+
+            brk <- breakpoints(names(tbl))
+
+            plot(c(0, max(tbl)), c(min(brk$lower), max(brk$upper)),
+                 type = "n", las = 3, main = "Distribution")
+            rect(0, brk$lower, tbl, brk$upper, col = TRANSPARENT)
+
+            abline(h = last, col = RED, lwd = 2)
+
+            form <- "p %.3f\n\u03BC\u0303 %.1f\n\u03BC %.1f\n\u03C3 %.1f"
+            legend(max(tbl, na.rm = TRUE) / 2, max(error, na.rm = TRUE),
+                   sprintf(form, ecdf(error)(last), med, mu, sig),
+                   xjust = 0.5, box.col = NA, bg = NA)
+
+            par(op)
+        })
+    })
+
+
     # HISTOGRAM
 
 
@@ -639,6 +762,125 @@ server <- function(input, output) {
                 apply(1, function(x) {
                     sprintf("%3.0f%% :: %7.2f", 100 * x[1], x[2])
                 })
+        })
+    })
+
+
+    # LOG-LOG
+
+
+    f_df_l <- reactive({
+        input$sym_l %>%
+            parse_symbol() %>%
+            handle_get(input$date_l0, input$date_l1, input$intr_l)
+    })
+
+    f_m <- reactive({
+        df <- f_df_l()
+        origin <- paste(input$date_lo)
+
+        if (input$log_lm == "xy") {
+            fit <- lm(log(close) ~ log(as_unix_day(date, origin)), df)
+        } else if (input$log_lm == "y") {
+            fit <- lm(log(close) ~ as_unix_day(date, origin), df)
+        } else if (input$log_lm == "x") {
+            fit <- lm(close ~ log(as_unix_day(date, origin)), df)
+        } else {
+            fit <- lm(close ~ as_unix_day(date, origin), df)
+        }
+
+        if (grepl("y", input$log_lm)) {
+            close_fit <- exp(predict(fit, df))
+        } else {
+            close_fit <- predict(fit, df)
+        }
+
+        list(fit = fit, close_fit = close_fit)
+    })
+
+    output$plot_l0 <- renderPlot(res = 90, {
+        df <- f_df_l()
+        m <- f_m()
+        fit <- m$fit
+        close_fit <- m$close_fit
+
+        with(df, {
+            op <- par(mar = c(3, 4, 3.5, 0.5))
+
+            lv <- ifelse(input$log_lv == "none", "", input$log_lv)
+
+
+            m <- coef(fit)[2]
+            b <- coef(fit)[1]
+            r <- summary(fit)$r.squared
+
+            p <- coef(summary(fit))[2, 4]
+            sig <- case_when(p < 0.001 ~ "***",
+                             p < 0.01 ~ "**",
+                             p < 0.05 ~ "*",
+                             p < 0.1 ~ ".",
+                             TRUE ~ "")
+
+            eq <- sprintf("%.3fx + %.3f", m, b)
+            rsq <- sprintf("(Rsq %.4f) %s", r, sig)
+
+            title <- "Log-Log Plot\n(%s, %s, %s, %s, %s, %s, %s)" %>%
+                sprintf(trimws(input$sym_l),
+                        input$log_lv,
+                        input$log_lm,
+                        input$intr_l,
+                        input$date_l0,
+                        input$date_l1,
+                        input$date_lo)
+
+            plot(date, close, type = "n", log = lv,
+                 xaxt = "n", las = 1,
+                 xlab = "", ylab = "",
+                 main = title)
+
+            abline(h = PRICES_0, v = YEARS_0, col = GREY90)
+            abline(h = PRICES_1, v = YEARS_5, col = GREY70)
+            axis(1, YEARS_5, YEARS_5_FMT)
+
+            legend(min(date, na.rm = TRUE), max(close, na.rm = TRUE),
+                   c(eq, rsq), lwd = c(2, 0), col = RED)
+
+            lines(date, close)
+            lines(date, close_fit, col = RED, lwd = 2)
+
+            par(op)
+        })
+    })
+
+    output$plot_l1 <- renderPlot(res = 90, {
+        df <- f_df_l()
+        m <- f_m()
+        fit <- m$fit
+        close_fit <- m$close_fit
+
+        with(df, {
+            op <- par(mar = c(3, 2, 3.5, 0.5))
+
+            error <- (close - close_fit) / close_fit
+            last <- tail(error, 1)
+
+            tbl <- error %>%
+                cut(20) %>%
+                table()
+
+            brk <- breakpoints(names(tbl))
+
+            plot(c(0, max(tbl)), c(min(brk$lower), max(brk$upper)),
+                 type = "n", las = 3, main = "Distribution")
+            rect(0, brk$lower, tbl, brk$upper, col = TRANSPARENT)
+
+            abline(h = last, col = RED, lwd = 2)
+            legend(max(tbl, na.rm = TRUE) / 2, max(error, na.rm = TRUE),
+                   sprintf("p = %.3f", ecdf(error)(last)),
+                   xjust = 0.5, col = RED, lwd = 2,
+                   box.col = NA, bg = NA)
+
+            par(op)
         })
     })
 
