@@ -481,7 +481,7 @@ ui <- navbarPage("Alphalpha",
 
             # model origin
             dateInput("date_lo", "Model Origin",
-                      value = "1965-01-01", max = today())
+                      value = "1943-02-02", max = today())
         ),
         column(width = 10,
             column(width = 10,
