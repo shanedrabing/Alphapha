@@ -30,7 +30,7 @@ TRANSPARENT <- "#00000000"
 # inputs
 OHLC <- c("open", "high", "low", "close", "adj_close", "volume")
 INTERVALS <- c("1d", "1wk", "1mo")
-OPERATION <- c("Change", "Difference")
+OPERATION <- c("Log Point", "Percent", "Difference")
 
 # cgi urls
 CGI_YAHOO <- "https://query1.finance.yahoo.com/v7/finance/download/%s?"
@@ -163,6 +163,18 @@ sma <- function(x, n) {
 
 relerr <- function(a, b) {
     100 * (b - a) / a
+}
+
+cnp <- function(a, b) {
+    100 * log(b / a)
+}
+
+to_pct <- function(cnp) {
+    100 * exp(cnp / 100)
+}
+
+to_cnp <- function(err) {
+    100 * log(1 + (err / 100))
 }
 
 
@@ -301,8 +313,10 @@ handle_series <- function(df, k0, k1, off, op, name) {
     # difference is default
     if (op == "Difference") {
         z <- x - y
-    } else if (op == "Change") {
+    } else if (op == "Percent") {
         z <- 100 * (x - y) / y
+    } else if (op == "Log Point") {
+        z <- 100 * log(x / y)
     }
 
     data.frame(df$date, z) %>%
@@ -638,15 +652,17 @@ server <- function(input, output) {
             major <- seq(-100, 1000, 50)
             minor <- setdiff(seq(-100, 1000, 10), major)
 
-            x <- relerr(lag(close, input$off_y), close)
+            x <- cnp(lag(close, input$off_y), close)
             i <- (input$date_y0 <= date) & (date < input$date_y1)
 
             plot(date[i], x[i], type = "n",
                  ylab = "Percent Change",
-                 main = title)
+                 main = title, yaxt = "n")
 
-            abline(h = minor, v = YEARS_0, col = GREY90)
-            abline(h = major, v = YEARS_5, col = GREY70)
+            axis(2, to_cnp(minor), minor)
+
+            abline(h = to_cnp(minor), v = YEARS_0, col = GREY90)
+            abline(h = to_cnp(major), v = YEARS_5, col = GREY70)
             abline(h = 0, v = input$date_y1, col = "lightblue3", lwd = 2)
 
             lines(date, x)
@@ -671,9 +687,9 @@ server <- function(input, output) {
             error <- relerr(lag(close, input$off_y), close)[i]
             last <- tail(error, 1)
 
-            med <- median(error, na.rm = TRUE)
-            mu <- mean(error, na.rm = TRUE)
-            sig <- sd(error, na.rm = TRUE)
+            med <- to_pct(median(to_cnp(error), na.rm = TRUE))
+            mu <- to_pct(mean(to_cnp(error), na.rm = TRUE))
+            sig <- to_pct(sd(to_cnp(error), na.rm = TRUE))
 
             tbl <- error %>%
                 cut(20) %>%
@@ -1048,7 +1064,7 @@ server <- function(input, output) {
             yaxt1_fmt <- seq(min(vec), max(vec), length.out = 6)
 
             # series
-            x <- (open + close) / 2
+            x <- (high + low + close) / 3
 
             # plot init
             plot(xlim, ylim, type = "n",
